@@ -102,6 +102,10 @@ android {
 		targetCompatibility(JavaVersion.VERSION_21)
 	}
 
+	testOptions {
+		unitTests.isReturnDefaultValues = true
+	}
+
 	useLibrary("android.test.base")
 	useLibrary("android.test.mock")
 
