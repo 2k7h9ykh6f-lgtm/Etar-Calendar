@@ -970,7 +970,7 @@ public class EditEventHelper {
             ArrayList<ReminderEntry> reminders, ArrayList<ReminderEntry> originalReminders,
             boolean forceSave) {
         // If the reminders have not changed, then don't update the database
-        if (reminders.equals(originalReminders) && !forceSave) {
+        if (!shouldSaveReminders(reminders, originalReminders, forceSave)) {
             return false;
         }
 
@@ -1015,7 +1015,7 @@ public class EditEventHelper {
             int eventIdIndex, ArrayList<ReminderEntry> reminders,
             ArrayList<ReminderEntry> originalReminders, boolean forceSave) {
         // If the reminders have not changed, then don't update the database
-        if (reminders.equals(originalReminders) && !forceSave) {
+        if (!shouldSaveReminders(reminders, originalReminders, forceSave)) {
             return false;
         }
 
@@ -1041,6 +1041,18 @@ public class EditEventHelper {
             ops.add(b.build());
         }
         return true;
+    }
+
+    /**
+     * Returns true if the reminders need to be written to the database: either the caller forced a
+     * save, or the current reminder list differs from the originally-loaded reminders.  This is the
+     * "skip unchanged reminders" decision used by {@link #saveReminders} and
+     * {@link #saveRemindersWithBackRef}; getting it wrong causes reminders to be silently dropped or
+     * needlessly rewritten, so it is extracted here to be unit testable without a content provider.
+     */
+    static boolean shouldSaveReminders(ArrayList<ReminderEntry> reminders,
+            ArrayList<ReminderEntry> originalReminders, boolean forceSave) {
+        return forceSave || !reminders.equals(originalReminders);
     }
 
     // It's the first event in the series if the start time before being

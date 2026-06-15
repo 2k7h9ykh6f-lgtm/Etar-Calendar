@@ -36,8 +36,10 @@ import com.android.calendar.calendarcommon2.Time;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Schedules the next EVENT_REMINDER_APP broadcast with AlarmManager, by querying the events
@@ -187,18 +189,21 @@ public class AlarmScheduler {
             }
         }
 
-        // Put query results of all events starting within some interval into map of event ID to
-        // local start time.
-        Map<Integer, List<Long>> eventMap = new HashMap<Integer, List<Long>>();
+        // Put query results of all events starting within some interval into a map of event ID
+        // to local start time(s), and collect the reminder minutes for those events.  The actual
+        // next-alarm computation is delegated to computeNextAlarm() so it can be unit tested
+        // independently of the content provider.
+        Map<Integer, List<Long>> eventStartTimes = new HashMap<Integer, List<Long>>();
+        Map<Integer, List<Integer>> eventReminderMinutes = new HashMap<Integer, List<Integer>>();
         Time timeObj = new Time();
-        long nextAlarmTime = Long.MAX_VALUE;
-        int nextAlarmEventId = 0;
         instancesCursor.moveToPosition(-1);
         while (!instancesCursor.isAfterLast()) {
             int index = 0;
-            eventMap.clear();
             StringBuilder eventIdsForQuery = new StringBuilder();
             eventIdsForQuery.append('(');
+            // Track the distinct event IDs that make up this batch's reminders query, so the
+            // "eventId IN (...)" clause stays the same size as before (batched to limit SQL length).
+            Set<Integer> batchEventIds = new HashSet<Integer>();
             while (index++ < batchSize && instancesCursor.moveToNext()) {
                 int eventId = instancesCursor.getInt(INSTANCES_INDEX_EVENTID);
                 long begin = instancesCursor.getLong(INSTANCES_INDEX_BEGIN);
@@ -211,14 +216,16 @@ public class AlarmScheduler {
                 } else {
                     localStartTime = begin;
                 }
-                List<Long> startTimes = eventMap.get(eventId);
+                List<Long> startTimes = eventStartTimes.get(eventId);
                 if (startTimes == null) {
                     startTimes = new ArrayList<Long>();
-                    eventMap.put(eventId, startTimes);
+                    eventStartTimes.put(eventId, startTimes);
+                }
+                startTimes.add(localStartTime);
+                if (batchEventIds.add(eventId)) {
                     eventIdsForQuery.append(eventId);
                     eventIdsForQuery.append(",");
                 }
-                startTimes.add(localStartTime);
 
                 // Log for debugging.
                 if (Log.isLoggable(TAG, Log.DEBUG)) {
@@ -247,34 +254,17 @@ public class AlarmScheduler {
                 cursor = contentResolver.query(Reminders.CONTENT_URI, REMINDERS_PROJECTION,
                         REMINDERS_WHERE + eventIdsForQuery, null, null);
 
-                // Process the reminders query results to find the next reminder time.
+                // Collect the reminder minutes for each event.
                 cursor.moveToPosition(-1);
                 while (cursor.moveToNext()) {
                     int eventId = cursor.getInt(REMINDERS_INDEX_EVENT_ID);
                     int reminderMinutes = cursor.getInt(REMINDERS_INDEX_MINUTES);
-                    List<Long> startTimes = eventMap.get(eventId);
-                    if (startTimes != null) {
-                        for (Long startTime : startTimes) {
-                            long alarmTime = startTime -
-                                    reminderMinutes * DateUtils.MINUTE_IN_MILLIS;
-                            if (alarmTime > currentMillis && alarmTime < nextAlarmTime) {
-                                nextAlarmTime = alarmTime;
-                                nextAlarmEventId = eventId;
-                            }
-
-                            if (Log.isLoggable(TAG, Log.DEBUG)) {
-                                timeObj.set(alarmTime);
-                                StringBuilder msg = new StringBuilder();
-                                msg.append("Reminders cursor result -- eventId:").append(eventId);
-                                msg.append(", startTime:").append(startTime);
-                                msg.append(", minutes:").append(reminderMinutes);
-                                msg.append(", alarmTime:").append(alarmTime);
-                                msg.append(" (").append(timeObj.format())
-                                        .append(")");
-                                Log.d(TAG, msg.toString());
-                            }
-                        }
+                    List<Integer> minutesList = eventReminderMinutes.get(eventId);
+                    if (minutesList == null) {
+                        minutesList = new ArrayList<Integer>();
+                        eventReminderMinutes.put(eventId, minutesList);
                     }
+                    minutesList.add(reminderMinutes);
                 }
             } finally {
                 if (cursor != null) {
@@ -283,10 +273,62 @@ public class AlarmScheduler {
             }
         }
 
-        // Schedule the alarm for the next reminder time.
-        if (nextAlarmTime < Long.MAX_VALUE) {
-            scheduleAlarm(context, nextAlarmEventId, nextAlarmTime, currentMillis, alarmManager);
+        // Compute and schedule the alarm for the next upcoming reminder time.
+        NextAlarm nextAlarm = computeNextAlarm(eventStartTimes, eventReminderMinutes, currentMillis);
+        if (nextAlarm.time < Long.MAX_VALUE) {
+            scheduleAlarm(context, nextAlarm.eventId, nextAlarm.time, currentMillis, alarmManager);
         }
+    }
+
+    /**
+     * Holder for the result of {@link #computeNextAlarm}: the next alarm time and the id of the
+     * event that produced it (the event id is used only for logging).
+     */
+    static class NextAlarm {
+        final long time;
+        final int eventId;
+
+        NextAlarm(long time, int eventId) {
+            this.time = time;
+            this.eventId = eventId;
+        }
+    }
+
+    /**
+     * Computes the next upcoming alarm time from the given event start times and reminder minutes.
+     * <p>
+     * For every reminder (in minutes) configured on an event, an alarm time is computed for each of
+     * that event's start times as {@code startTime - minutes * MINUTE_IN_MILLIS}.  The earliest such
+     * alarm time that is still strictly in the future (greater than {@code currentMillis}) wins.
+     * Past alarm times (e.g. for events that already started, or reminders whose lead time has
+     * already elapsed) are ignored, and events with no reminders contribute nothing.
+     *
+     * @param eventStartTimes      map of event id to that event's local start time(s)
+     * @param eventReminderMinutes map of event id to that event's reminder lead times in minutes
+     * @param currentMillis        the current time; only alarm times after this are considered
+     * @return the next alarm, with {@link NextAlarm#time} == {@link Long#MAX_VALUE} if none qualify
+     */
+    static NextAlarm computeNextAlarm(Map<Integer, List<Long>> eventStartTimes,
+            Map<Integer, List<Integer>> eventReminderMinutes, long currentMillis) {
+        long nextAlarmTime = Long.MAX_VALUE;
+        int nextAlarmEventId = 0;
+        for (Map.Entry<Integer, List<Integer>> entry : eventReminderMinutes.entrySet()) {
+            int eventId = entry.getKey();
+            List<Long> startTimes = eventStartTimes.get(eventId);
+            if (startTimes == null) {
+                continue;
+            }
+            for (int reminderMinutes : entry.getValue()) {
+                for (long startTime : startTimes) {
+                    long alarmTime = startTime - reminderMinutes * DateUtils.MINUTE_IN_MILLIS;
+                    if (alarmTime > currentMillis && alarmTime < nextAlarmTime) {
+                        nextAlarmTime = alarmTime;
+                        nextAlarmEventId = eventId;
+                    }
+                }
+            }
+        }
+        return new NextAlarm(nextAlarmTime, nextAlarmEventId);
     }
 
     /**
@@ -294,8 +336,16 @@ public class AlarmScheduler {
      * alarm time with a slight delay (to account for the possible duplicate broadcast
      * from the provider).
      */
-    private static void scheduleAlarm(Context context, long eventId, long alarmTime,
-            long currentMillis, AlarmManagerInterface alarmManager) {
+    /**
+     * Applies the scheduling cap to a candidate alarm time: an alarm for an event far in the
+     * future (not present in our limited-range query) is pulled in to at most 1 day out so it can
+     * be at most 1 day late, and a small delay is added (see {@link #ALARM_DELAY_MS}).
+     *
+     * @param alarmTime     the candidate alarm time
+     * @param currentMillis the current time
+     * @return the capped alarm time with the delay applied
+     */
+    static long capAlarmTime(long alarmTime, long currentMillis) {
         // Max out the alarm time to 1 day out, so an alert for an event far in the future
         // (not present in our event query results for a limited range) can only be at
         // most 1 day late.
@@ -306,6 +356,13 @@ public class AlarmScheduler {
 
         // Add a slight delay (see comments on the member var).
         alarmTime += ALARM_DELAY_MS;
+        return alarmTime;
+    }
+
+    private static void scheduleAlarm(Context context, long eventId, long alarmTime,
+            long currentMillis, AlarmManagerInterface alarmManager) {
+        // Cap the alarm time to at most 1 day out (and add a slight delay).
+        alarmTime = capAlarmTime(alarmTime, currentMillis);
 
         if (AlertService.DEBUG) {
             Time time = new Time();
