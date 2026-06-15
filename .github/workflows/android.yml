@@ -27,6 +27,19 @@ jobs:
             ${{ runner.os }}-gradle-
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@v6
+      - name: Run unit tests
+        run: |
+          ./gradlew :app:testDebugUnitTest
+      - name: Upload test reports
+        # Always run so JUnit/Gradle test results are preserved even when tests fail
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/
+          if-no-files-found: warn
       - name: Build with Gradle
         run: |
           ./gradlew :app:assembleDebug
