@@ -24,7 +24,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
-class FakeSharedPreferences implements SharedPreferences, SharedPreferences.Editor {
+public class FakeSharedPreferences implements SharedPreferences, SharedPreferences.Editor {
 
     private HashMap<String, Object> mValues = new HashMap<String, Object>();
     private HashMap<String, Object> mTempValues = new HashMap<String, Object>();

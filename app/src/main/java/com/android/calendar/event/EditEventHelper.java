@@ -309,8 +309,6 @@ public class EditEventHelper {
      */
     public boolean saveEvent(CalendarEventModel model, CalendarEventModel originalModel,
             int modifyWhich) {
-        boolean forceSaveReminders = false;
-
         if (DEBUG) {
             Log.d(TAG, "Saving event model: " + model);
         }
@@ -341,6 +339,30 @@ public class EditEventHelper {
             return false;
         }
 
+        ArrayList<ContentProviderOperation> ops = buildSaveOperations(model, originalModel,
+                modifyWhich);
+        if (ops == null) {
+            return false;
+        }
+
+        mService.startBatch(mService.getNextToken(), null, android.provider.CalendarContract.AUTHORITY, ops,
+                Utils.UNDO_DELAY);
+
+        return true;
+    }
+
+    /**
+     * Builds the list of ContentProviderOperations needed to save the given event model.
+     * Extracted from saveEvent for testability.
+     *
+     * @param model The event model to save
+     * @param originalModel A model of the original event if it exists
+     * @param modifyWhich For recurring events which type of series modification to use
+     * @return the list of operations, or null if validation fails
+     */
+    ArrayList<ContentProviderOperation> buildSaveOperations(CalendarEventModel model,
+            CalendarEventModel originalModel, int modifyWhich) {
+        boolean forceSaveReminders = false;
         ArrayList<ContentProviderOperation> ops = new ArrayList<ContentProviderOperation>();
         int eventIdIndex = -1;
 
@@ -643,10 +665,7 @@ public class EditEventHelper {
             }
         }
 
-        mService.startBatch(mService.getNextToken(), null, android.provider.CalendarContract.AUTHORITY, ops,
-                Utils.UNDO_DELAY);
-
-        return true;
+        return ops;
     }
 
     /**

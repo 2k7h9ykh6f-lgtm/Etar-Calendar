@@ -105,6 +105,12 @@ android {
 	useLibrary("android.test.base")
 	useLibrary("android.test.mock")
 
+	testOptions {
+		unitTests {
+			isIncludeAndroidResources = true
+		}
+	}
+
 	androidResources {
 		generateLocaleConfig = true
 	}
@@ -123,6 +129,9 @@ dependencies {
     implementation(libs.androidx.concurrent.futures)
     testImplementation(libs.junit)
 	testImplementation(libs.androidx.test.runner)
+	testImplementation(libs.mockito.core)
+	testImplementation(libs.mockito.inline)
+	testImplementation(libs.robolectric)
 
 	coreLibraryDesugaring(libs.android.tools.desugar)
 

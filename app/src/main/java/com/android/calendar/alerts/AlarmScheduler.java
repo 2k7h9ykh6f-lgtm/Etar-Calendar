@@ -89,6 +89,20 @@ public class AlarmScheduler {
     private static final long MAX_ALARM_ELAPSED_MS = DateUtils.DAY_IN_MILLIS;
 
     /**
+     * Factory for creating PendingIntents, extracted for testability.
+     */
+    interface PendingIntentFactory {
+        PendingIntent getBroadcast(Context context, int requestCode, Intent intent, int flags);
+    }
+
+    static class DefaultPendingIntentFactory implements PendingIntentFactory {
+        @Override
+        public PendingIntent getBroadcast(Context context, int requestCode, Intent intent, int flags) {
+            return PendingIntent.getBroadcast(context, requestCode, intent, flags);
+        }
+    }
+
+    /**
      * Schedules the nearest upcoming alarm, to refresh notifications.
      *
      * This is historically done in the provider but we dupe this here so the unbundled
@@ -99,19 +113,21 @@ public class AlarmScheduler {
      */
     public static void scheduleNextAlarm(Context context) {
         scheduleNextAlarm(context, AlertUtils.createAlarmManager(context),
-                REMINDER_QUERY_BATCH_SIZE, System.currentTimeMillis());
+                REMINDER_QUERY_BATCH_SIZE, System.currentTimeMillis(),
+                new DefaultPendingIntentFactory());
     }
 
     // VisibleForTesting
     static void scheduleNextAlarm(Context context, AlarmManagerInterface alarmManager,
-            int batchSize, long currentMillis) {
+            int batchSize, long currentMillis, PendingIntentFactory piFactory) {
         Cursor instancesCursor = null;
         try {
             instancesCursor = queryUpcomingEvents(context, context.getContentResolver(),
                     currentMillis);
             if (instancesCursor != null) {
                 queryNextReminderAndSchedule(instancesCursor, context,
-                        context.getContentResolver(), alarmManager, batchSize, currentMillis);
+                        context.getContentResolver(), alarmManager, batchSize, currentMillis,
+                        piFactory);
             }
         } finally {
             if (instancesCursor != null) {
@@ -123,7 +139,7 @@ public class AlarmScheduler {
     /**
      * Queries events starting within a fixed interval from now.
      */
-    private static Cursor queryUpcomingEvents(Context context, ContentResolver contentResolver,
+    static Cursor queryUpcomingEvents(Context context, ContentResolver contentResolver,
             long currentMillis) {
         Time time = new Time();
         time.normalize();
@@ -175,9 +191,9 @@ public class AlarmScheduler {
      * Queries for all the reminders of the events in the instancesCursor, and schedules
      * the alarm for the next upcoming reminder.
      */
-    private static void queryNextReminderAndSchedule(Cursor instancesCursor, Context context,
+    static void queryNextReminderAndSchedule(Cursor instancesCursor, Context context,
             ContentResolver contentResolver, AlarmManagerInterface alarmManager,
-            int batchSize, long currentMillis) {
+            int batchSize, long currentMillis, PendingIntentFactory piFactory) {
         if (AlertService.DEBUG) {
             int eventCount = instancesCursor.getCount();
             if (eventCount == 0) {
@@ -285,7 +301,8 @@ public class AlarmScheduler {
 
         // Schedule the alarm for the next reminder time.
         if (nextAlarmTime < Long.MAX_VALUE) {
-            scheduleAlarm(context, nextAlarmEventId, nextAlarmTime, currentMillis, alarmManager);
+            scheduleAlarm(context, nextAlarmEventId, nextAlarmTime, currentMillis, alarmManager,
+                    piFactory);
         }
     }
 
@@ -295,7 +312,8 @@ public class AlarmScheduler {
      * from the provider).
      */
     private static void scheduleAlarm(Context context, long eventId, long alarmTime,
-            long currentMillis, AlarmManagerInterface alarmManager) {
+            long currentMillis, AlarmManagerInterface alarmManager,
+            PendingIntentFactory piFactory) {
         // Max out the alarm time to 1 day out, so an alert for an event far in the future
         // (not present in our event query results for a limited range) can only be at
         // most 1 day late.
@@ -323,7 +341,7 @@ public class AlarmScheduler {
         Intent intent = new Intent(AlertReceiver.EVENT_REMINDER_APP_ACTION);
         intent.setClass(context, AlertReceiver.class);
         intent.putExtra(CalendarContract.CalendarAlerts.ALARM_TIME, alarmTime);
-        PendingIntent pi = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent pi = piFactory.getBroadcast(context, 0, intent, PendingIntent.FLAG_IMMUTABLE);
         alarmManager.set(AlarmManager.RTC_WAKEUP, alarmTime, pi);
     }
 }
