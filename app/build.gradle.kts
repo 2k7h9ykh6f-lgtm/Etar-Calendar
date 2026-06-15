@@ -109,6 +109,12 @@ android {
 		generateLocaleConfig = true
 	}
 
+	testOptions {
+		unitTests {
+			isIncludeAndroidResources = true
+		}
+	}
+
 }
 
 dependencies {
@@ -123,6 +129,7 @@ dependencies {
     implementation(libs.androidx.concurrent.futures)
     testImplementation(libs.junit)
 	testImplementation(libs.androidx.test.runner)
+	testImplementation(libs.robolectric)
 
 	coreLibraryDesugaring(libs.android.tools.desugar)
 
