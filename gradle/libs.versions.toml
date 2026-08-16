@@ -1,6 +1,6 @@
 [versions]
 agp = "9.2.1"
-compat = "1.7.1"
+compat = "1.8.0"
 constraint = "2.2.1"
 core = "1.18.0"
 desugar = "2.1.5"
